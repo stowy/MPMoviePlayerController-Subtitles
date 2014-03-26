@@ -43,10 +43,11 @@ static NSString *const kText = @"kText";
     
     // Error
     NSError *error = nil;
+    NSStringEncoding encoding;
     
     // File to string
     NSString *subtitleString = [NSString stringWithContentsOfFile:localFile
-                                                         encoding:NSUTF8StringEncoding
+                                                         usedEncoding:&encoding
                                                             error:&error];
     if (error && failure != NULL) {
         failure(error);
@@ -164,11 +165,13 @@ static NSString *const kText = @"kText";
         // Temp object
         NSTimeInterval startInterval = [self timeFromString:startString];
         NSTimeInterval endInterval = [self timeFromString:endString];
+        
+        
         NSDictionary *tempInterval = @{
                                        kIndex : indexString,
                                        kStart : @(startInterval),
-                                       kEnd : @(endInterval),
-                                       kText : textString ? textString : @""
+                                      kEnd : @(endInterval),
+                                      kText : textString ? textString : @""
                                        };
         [self.subtitlesParts setObject:tempInterval
                                 forKey:indexString];
@@ -178,6 +181,7 @@ static NSString *const kText = @"kText";
     completion(YES, nil);
     
 }
+
 
 - (NSTimeInterval)timeFromString:(NSString *)timeString {
     
@@ -253,7 +257,7 @@ static NSString *const kText = @"kText";
                                                                  repeats:YES];
             [self.subtitleTimer fire];
             
-            
+            [self addAndAnimateViews];
             // Add label
             if (!self.subtitleLabel) {
                 
@@ -293,6 +297,72 @@ static NSString *const kText = @"kText";
     
 }
 
+-(void)addAndAnimateViews {
+    UIView *view = self.view;
+    
+    CALayer *coverLayer = [CALayer layer];
+    coverLayer.frame = CGRectInset(self.view.frame, 0,CGRectGetHeight(self.view.frame)/4);
+    coverLayer.backgroundColor = [[UIColor blackColor] CGColor];
+    [view.layer addSublayer:coverLayer];
+    
+    CATextLayer *textLayer = [CATextLayer layer];
+    textLayer.frame = CGRectMake(0.0, CGRectGetHeight(self.view.bounds) / 2,
+                                 CGRectGetWidth(self.view.bounds), 100.0);
+    textLayer.string = @"Here is some text to display";
+    [self formatTextLayer:textLayer];
+    [view.layer addSublayer:textLayer];
+    
+    CATextLayer *textLayer2 = [CATextLayer layer];
+    textLayer2.frame = CGRectOffset(textLayer.frame, 0, 45);
+    textLayer2.string = @"Here is some more text to display";
+    [self formatTextLayer:textLayer2];
+    [view.layer addSublayer:textLayer2];
+    
+    CABasicAnimation* fadeAnim = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fadeAnim.fromValue = [NSNumber numberWithFloat:1.0];
+    fadeAnim.toValue = [NSNumber numberWithFloat:0.7];
+    fadeAnim.duration = 1.0;
+    [textLayer addAnimation:fadeAnim forKey:@"opacity"];
+    
+    // Change the actual data value in the layer to the final value.
+    textLayer.opacity = 0.7;
+    
+    CABasicAnimation *anim = [CABasicAnimation animationWithKeyPath:@"position"];
+    
+    CGPoint endPoint = CGPointMake(textLayer.position.x, 100);
+    anim.fromValue = [NSValue valueWithCGPoint:textLayer.position];
+    anim.toValue = [NSValue valueWithCGPoint:endPoint];
+    anim.duration = 3.0;
+    
+    textLayer.position = endPoint;
+    
+    [textLayer addAnimation:anim forKey:@"positionyStuff"];
+}
+
+-(void)formatTextLayer:(CATextLayer *)textLayer {
+    textLayer.wrapped = YES;
+    
+    CGFloat fontSize = 0.0;
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        fontSize = 40.0;
+    } else {
+        fontSize = 20.0;
+    }
+    textLayer.fontSize = fontSize;
+    
+    textLayer.backgroundColor = [[UIColor clearColor] CGColor];
+    //    textLayer.font = CGFontCreateWithFontName(<#CFStringRef name#>);
+    textLayer.foregroundColor = [[UIColor whiteColor] CGColor];
+    //    self.subtitleLabel.numberOfLines = 0;
+    textLayer.alignmentMode = kCAAlignmentCenter;
+    textLayer.shadowColor = [UIColor blackColor].CGColor;
+    textLayer.shadowOffset = CGSizeMake(6.0, 6.0);
+    textLayer.shadowOpacity = 0.9;
+    textLayer.shadowRadius = 4.0;
+    textLayer.shouldRasterize = YES;
+    textLayer.rasterizationScale = [[UIScreen mainScreen] scale];
+}
+
 - (void)orientationWillChange:(NSNotification *)notification {
     
     // Hidden label
@@ -302,6 +372,7 @@ static NSString *const kText = @"kText";
 
 - (void)orientationDidChange:(NSNotification *)notification {
     
+    [self addAndAnimateViews];
     // Label position
     CGSize size = [self.subtitleLabel.text sizeWithFont:self.subtitleLabel.font
                                       constrainedToSize:CGSizeMake(CGRectGetWidth(self.subtitleLabel.bounds), CGFLOAT_MAX)];
