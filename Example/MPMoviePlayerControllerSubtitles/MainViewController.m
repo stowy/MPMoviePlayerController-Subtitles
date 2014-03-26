@@ -42,11 +42,11 @@
 - (IBAction)showVideoAction:(UIButton *)sender {
     
     // Video file
-    NSString *filePathStr = [[NSBundle mainBundle] pathForResource:@"example" ofType:@"mp4"];
+    NSString *filePathStr = [[NSBundle mainBundle] pathForResource:@"015day" ofType:@"mp3"];
     NSURL *fileURL = [NSURL fileURLWithPath:filePathStr];
     
     // Subtitles file
-    NSString *subtitlesPathStr = [[NSBundle mainBundle] pathForResource:@"example" ofType:@"srt"];
+    NSString *subtitlesPathStr = [[NSBundle mainBundle] pathForResource:@"english" ofType:@"srt"];
     
     // Create MoviePlayer
     MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc] initWithContentURL:fileURL];

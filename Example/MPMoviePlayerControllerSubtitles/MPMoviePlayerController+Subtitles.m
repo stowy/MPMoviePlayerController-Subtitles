@@ -8,19 +8,19 @@
 
 #import "MPMoviePlayerController+Subtitles.h"
 #import <objc/runtime.h>
+#import "UIViewHierarchy.h"
+
 
 static NSString *const kIndex = @"kIndex";
 static NSString *const kStart = @"kStart";
 static NSString *const kEnd = @"kEnd";
 static NSString *const kText = @"kText";
 
+static CGFloat const SUBTITLE_INIT_HEIGHT = 100;
+static NSTimeInterval const OFFSET_TIME = 8;
+
 
 @interface MPMoviePlayerViewController ()
-
-#pragma mark - Properties
-@property (strong, nonatomic) NSMutableDictionary *subtitlesParts;
-@property (strong, nonatomic) NSTimer *subtitleTimer;
-@property (strong, nonatomic) UILabel *subtitleLabel;
 
 #pragma mark - Private methods
 - (void)showSubtitles:(BOOL)show;
@@ -37,26 +37,40 @@ static NSString *const kText = @"kText";
 @end
 
 @implementation MPMoviePlayerController (Subtitles)
+@dynamic subtitlesParts;
+@dynamic subtitleLabel;
+@dynamic subtitleTimer;
+@dynamic subtitleCurrentRect;
+@dynamic subtitlesView;
+@dynamic playerLayer;
+@dynamic syncedLayer;
+@dynamic isInitialised;
+
+
+
 
 #pragma mark - Methods
 - (void)openSRTFileAtPath:(NSString *)localFile completion:(void (^)(BOOL finished))success failure:(void (^)(NSError *error))failure {
     
-    // Error
     NSError *error = nil;
+    NSStringEncoding encoding;
+    //NSString *my_string = [[NSString alloc] initWithContentsOfURL:url
+    //                                                     encoding:NSUTF8StringEncoding
+    //                                                        error:&error];
+    NSString *subtitleString = [[NSString alloc] initWithContentsOfURL:[NSURL fileURLWithPath:localFile]
+                                                usedEncoding:&encoding
+                                                       error:&error];
+    NSLog(@"Encoding: %lu", (unsigned long)encoding);
     
-    // File to string
-    NSString *subtitleString = [NSString stringWithContentsOfFile:localFile
-                                                         encoding:NSUTF8StringEncoding
-                                                            error:&error];
-    if (error && failure != NULL) {
-        failure(error);
+    if (error)
+    {
+        NSLog(@"there was a problem reading a subtitles file: %@", error);
         return;
     }
-    
-    // Parse and show text
+
     
     [self openWithSRTString:subtitleString completion:success failure:failure];
-
+    
     
 }
 
@@ -66,6 +80,22 @@ static NSString *const kText = @"kText";
                parsed:^(BOOL parsed, NSError *error) {
                    
                    if (!error && success != NULL) {
+                       
+                       //UIView *subview = [[self.view subviews][0] subviews][0];
+                       UIView *videoView = [self.view findSubviewWithLayerOfClass:[AVPlayerLayer class]];
+                       
+                       if (videoView) {
+                           self.subtitlesView = videoView;
+                           self.playerLayer = (AVPlayerLayer *)videoView.layer;
+                           // listen to readyForDisplay indicator
+                           if (self.playerLayer.isReadyForDisplay) {
+                               [self addSyncedLayerForPlayerLayer];
+                           } else {
+                               self.isInitialised = @NO;
+//                               [self.playerLayer addObserver:self forKeyPath:@"readyForDisplay" options:0 context:nil];
+                           }
+                           
+                       }
                        
                        // Register for notifications
                        [[NSNotificationCenter defaultCenter] addObserver:self
@@ -98,7 +128,7 @@ static NSString *const kText = @"kText";
 - (void)showSubtitles:(BOOL)show {
     
     // Hide label
-    self.subtitleLabel.hidden = !show;
+    self.subtitlesView.hidden = !show;
     
 }
 
@@ -198,38 +228,170 @@ static NSString *const kText = @"kText";
 
 - (void)searchAndShowSubtitle {
     
-    // Search for timeInterval
-    NSPredicate *initialPredicate = [NSPredicate predicateWithFormat:@"(%@ >= %K) AND (%@ <= %K)", @(self.currentPlaybackTime), kStart, @(self.currentPlaybackTime), kEnd];
-    NSArray *objectsFound = [[self.subtitlesParts allValues] filteredArrayUsingPredicate:initialPredicate];
-    NSDictionary *lastFounded = (NSDictionary *)[objectsFound lastObject];
+    NSDictionary *lastFounded = [self subtitleForPlaybackTime:self.currentPlaybackTime];
     
     // Show text
     if (lastFounded) {
         
         // Get text
         self.subtitleLabel.text = [lastFounded objectForKey:kText];
-
-
-        // Label position
-        CGSize size = [self.subtitleLabel.text sizeWithFont:self.subtitleLabel.font
-                                          constrainedToSize:CGSizeMake(CGRectGetWidth(self.subtitleLabel.bounds), CGFLOAT_MAX)];
-        self.subtitleLabel.frame = ({
-            CGRect frame = self.subtitleLabel.frame;
-            frame.size.height = size.height;
-            frame;
-        });
+        [self resizeLabel:self.subtitleLabel];
+        
+        
         self.subtitleLabel.center = CGPointMake(CGRectGetWidth(self.view.bounds) / 2.0, CGRectGetHeight(self.view.bounds) - (CGRectGetHeight(self.subtitleLabel.bounds) / 2.0) - 15.0);
-
+        
     } else {
         
         self.subtitleLabel.text = @"";
         
     }
     
+    
+}
+
+-(void)resizeLabel:(UILabel *)label {
+    // Label position
+    CGSize size = [self sizeForText:label.text
+                           withFont:label.font
+               constrainedWithWidth:CGRectGetWidth(label.bounds)];
+    
+    label.frame = ({
+        CGRect frame = label.frame;
+        frame.size.height = size.height;
+        frame;
+    });
+}
+
+-(void)createAndAnimateSubtitles {
+    
+//    NSTimeInterval timeWithOffset = self.currentPlaybackTime + OFFSET_TIME;
+    
+//    NSDictionary *nextSubDict = [self subtitleForPlaybackTime:timeWithOffset];
+    
+    NSArray *subtitles = [self.subtitlesParts allValues];
+    // Sort
+    
+    NSSortDescriptor *sortDescriptor =
+    [[NSSortDescriptor alloc] initWithKey:kStart ascending:YES];
+    
+    NSArray *sortedSubs =  [subtitles sortedArrayUsingDescriptors:@[sortDescriptor]];
+
+    for (NSDictionary *nextSubDict in sortedSubs) {
+        
+        CGFloat bottomScreenY = CGRectGetHeight(self.subtitlesView.bounds) + (SUBTITLE_INIT_HEIGHT / 2.0);
+        
+        UILabel *subtitleLabel = [self subtitleLabelAddedToSubtitlesViewAtYcenter:bottomScreenY];
+        subtitleLabel.text = [nextSubDict objectForKey:kText];
+        [self resizeLabel:subtitleLabel];
+        
+        subtitleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        
+        NSTimeInterval startTime = [[nextSubDict objectForKey:kStart] integerValue];
+        NSTimeInterval endTime = [[nextSubDict objectForKey:kEnd] integerValue];
+        NSTimeInterval duration = [[nextSubDict objectForKey:kEnd] integerValue] - startTime;
+
+        if (startTime == 0) {
+            startTime += 0.001;
+        }
+        
+        CGFloat subtitleXPos = subtitleLabel.layer.position.x;
+        CGFloat subtitleHeight = CGRectGetHeight(subtitleLabel.frame);
+        
+        CGPoint bottomScreen = CGPointMake(subtitleXPos, bottomScreenY);
+        CGPoint offTopEndPoint = CGPointMake(subtitleXPos, 0 - subtitleHeight);
+        
+        CGPoint midPoint = CGPointMake(subtitleXPos, CGRectGetHeight(self.subtitlesView.frame)/2);
+        CGPoint startCurrentVis = CGPointMake(subtitleXPos, midPoint.y + subtitleHeight/2);
+        CGPoint endCurrentVis = CGPointMake(subtitleXPos, midPoint.y - subtitleHeight/2);
+        
+        CGPoint subStartPoint = bottomScreen;
+        
+        
+        [self.syncedLayer addSublayer:subtitleLabel.layer];
+        
+        [UIView animateWithDuration:duration animations:^{
+            
+            CABasicAnimation* onAnim = [CABasicAnimation animationWithKeyPath:@"position"];
+            onAnim.fromValue = [NSValue valueWithCGPoint:subStartPoint];
+            onAnim.toValue = [NSValue valueWithCGPoint:startCurrentVis];
+            onAnim.duration = OFFSET_TIME;
+            onAnim.beginTime = startTime - OFFSET_TIME;
+            onAnim.removedOnCompletion = NO;
+            
+            CABasicAnimation* mainAnim = [CABasicAnimation animationWithKeyPath:@"position"];
+            mainAnim.fromValue = [NSValue valueWithCGPoint:startCurrentVis];
+            mainAnim.toValue = [NSValue valueWithCGPoint:endCurrentVis];
+            mainAnim.duration = duration;
+            mainAnim.beginTime = startTime;
+            mainAnim.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+            
+            mainAnim.removedOnCompletion = NO;
+            
+            CABasicAnimation* offAnim = [CABasicAnimation animationWithKeyPath:@"position"];
+            offAnim.fromValue = [NSValue valueWithCGPoint:endCurrentVis];
+            offAnim.toValue = [NSValue valueWithCGPoint:offTopEndPoint];
+            offAnim.duration = OFFSET_TIME;
+            offAnim.beginTime = endTime;
+            offAnim.removedOnCompletion = NO;
+
+            [subtitleLabel.layer addAnimation:onAnim forKey:@"AnimateFrameBefore"];
+            [subtitleLabel.layer addAnimation:mainAnim forKey:@"AnimateFrameDuring"];
+            [subtitleLabel.layer addAnimation:offAnim forKey:@"AnimateFrameAfter"];
+        }];
+    }
+
+    self.isInitialised = @YES;
+    
+}
+
+-(NSDictionary *)subtitleForPlaybackTime:(NSTimeInterval)playbackTime {
+    // Search for timeInterval
+    NSPredicate *initialPredicate = [NSPredicate predicateWithFormat:@"(%@ >= %K) AND (%@ <= %K)", @(playbackTime), kStart, @(playbackTime), kEnd];
+    NSArray *objectsFound = [[self.subtitlesParts allValues] filteredArrayUsingPredicate:initialPredicate];
+    NSDictionary *lastFounded = (NSDictionary *)[objectsFound lastObject];
+    
+    return lastFounded;
+}
+
+-(CGSize)sizeForText:(NSString *)text withFont:(UIFont *)font constrainedWithWidth:(CGFloat)widthConstraint {
+    
+    CGSize size;
+    
+    if ([text respondsToSelector:@selector(boundingRectWithSize:options:context:)]) {
+        
+        NSAttributedString *attributedText =
+        [[NSAttributedString alloc]
+         initWithString:text
+         attributes:@
+         {
+         NSFontAttributeName:font
+         }];
+        CGRect rect = [attributedText boundingRectWithSize:(CGSize){widthConstraint, CGFLOAT_MAX}
+                                                   options:NSStringDrawingUsesLineFragmentOrigin
+                                                   context:nil];
+        CGSize tempSize = rect.size;
+        CGFloat height = ceilf(tempSize.height);
+        CGFloat width = ceilf(tempSize.width);
+        
+        size = CGSizeMake(width, height);
+        
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        size = [text sizeWithFont:font
+                constrainedToSize:CGSizeMake(widthConstraint, CGFLOAT_MAX)];
+#pragma clang diagnostic pop
+    }
+    
+    return size;
 }
 
 #pragma mark - Notifications
 - (void)playbackStateDidChange:(NSNotification *)notification {
+    
+    if (![self.isInitialised boolValue]) {
+        [self addSyncedLayerForPlayerLayer];
+    }
     
     switch (self.playbackState) {
             
@@ -253,39 +415,19 @@ static NSString *const kText = @"kText";
                                                                  repeats:YES];
             [self.subtitleTimer fire];
             
-            
             // Add label
             if (!self.subtitleLabel) {
                 
-                // Add label
-                CGFloat fontSize = 0.0;
-                if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-                    fontSize = 40.0;
-                } else {
-                    fontSize = 20.0;
-                }
-                self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0.0, 0.0, CGRectGetWidth(self.view.bounds) - 30.0, 100.0)];
-                self.subtitleLabel.center = CGPointMake(CGRectGetWidth(self.view.bounds) / 2.0, CGRectGetHeight(self.view.bounds) - (CGRectGetHeight(self.subtitleLabel.bounds) / 2.0) - 15.0);
-                self.subtitleLabel.backgroundColor = [UIColor clearColor];
-                self.subtitleLabel.font = [UIFont boldSystemFontOfSize:fontSize];
-                self.subtitleLabel.textColor = [UIColor whiteColor];
-                self.subtitleLabel.numberOfLines = 0;
-                self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
-                self.subtitleLabel.layer.shadowColor = [UIColor blackColor].CGColor;
-                self.subtitleLabel.layer.shadowOffset = CGSizeMake(6.0, 6.0);
-                self.subtitleLabel.layer.shadowOpacity = 0.9;
-                self.subtitleLabel.layer.shadowRadius = 4.0;
-                self.subtitleLabel.layer.shouldRasterize = YES;
-                self.subtitleLabel.layer.rasterizationScale = [[UIScreen mainScreen] scale];
-                [self.view addSubview:self.subtitleLabel];
+                CGFloat yCenter = CGRectGetHeight(self.subtitlesView.bounds) - (SUBTITLE_INIT_HEIGHT / 2.0) - 15.0;
                 
+                self.subtitleLabel = [self subtitleLabelAddedToSubtitlesViewAtYcenter:yCenter];
             }
             
             break;
         }
             
         default: {
-
+            
             break;
         }
             
@@ -293,18 +435,53 @@ static NSString *const kText = @"kText";
     
 }
 
+-(UILabel *)subtitleLabelAddedToSubtitlesViewAtYcenter:(CGFloat)yCenter {
+    
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(0.0, 0.0, CGRectGetWidth(self.subtitlesView.bounds) - 30.0, SUBTITLE_INIT_HEIGHT)];
+    
+    CGFloat xCenter = CGRectGetWidth(self.view.bounds) / 2.0;
+    
+    label.center = CGPointMake(xCenter, yCenter);
+    label.backgroundColor = [UIColor clearColor];
+    
+    // Add label
+    CGFloat fontSize = 0.0;
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        fontSize = 40.0;
+    } else {
+        fontSize = 20.0;
+    }
+    label.font = [UIFont boldSystemFontOfSize:fontSize];
+    
+    label.textColor = [UIColor whiteColor];
+    label.numberOfLines = 0;
+    label.textAlignment = NSTextAlignmentCenter;
+    label.layer.shadowColor = [UIColor blackColor].CGColor;
+    label.layer.shadowOffset = CGSizeMake(6.0, 6.0);
+    label.layer.shadowOpacity = 0.9;
+    label.layer.shadowRadius = 4.0;
+    label.layer.shouldRasterize = YES;
+    label.layer.rasterizationScale = [[UIScreen mainScreen] scale];
+    [self.subtitlesView addSubview:label];
+    
+    return label;
+}
+
 - (void)orientationWillChange:(NSNotification *)notification {
     
     // Hidden label
-    self.subtitleLabel.hidden = YES;
+    self.subtitlesView.hidden = YES;
     
 }
 
 - (void)orientationDidChange:(NSNotification *)notification {
     
     // Label position
-    CGSize size = [self.subtitleLabel.text sizeWithFont:self.subtitleLabel.font
-                                      constrainedToSize:CGSizeMake(CGRectGetWidth(self.subtitleLabel.bounds), CGFLOAT_MAX)];
+    
+    CGSize size = [self sizeForText:self.subtitleLabel.text
+                           withFont:self.subtitleLabel.font
+               constrainedWithWidth:CGRectGetWidth(self.subtitleLabel.bounds)];
+    
     self.subtitleLabel.frame = ({
         CGRect frame = self.subtitleLabel.frame;
         frame.size.height = size.height;
@@ -313,9 +490,43 @@ static NSString *const kText = @"kText";
     self.subtitleLabel.center = CGPointMake(CGRectGetWidth(self.view.bounds) / 2.0, CGRectGetHeight(self.view.bounds) - (CGRectGetHeight(self.subtitleLabel.bounds) / 2.0) - 15.0);
     
     // Hidden label
-    self.subtitleLabel.hidden = NO;
+    self.subtitlesView.hidden = NO;
     
 }
+
+
+-(void)addSyncedLayerForPlayerLayer {
+    
+    AVPlayerItem *item = self.playerLayer.player.currentItem;
+    AVSynchronizedLayer *syncedLayer = [AVSynchronizedLayer synchronizedLayerWithPlayerItem:item];
+    syncedLayer.frame = self.playerLayer.frame;
+    
+    UIView *videoView = self.subtitlesView;
+    self.subtitlesView = [[UIView alloc] initWithFrame:videoView.frame];
+    [videoView addSubview:self.subtitlesView];
+    
+    [self.subtitlesView.layer addSublayer:syncedLayer];
+    self.syncedLayer = syncedLayer;
+    [self createAndAnimateSubtitles];
+}
+
+-(void)observeValueForKeyPath:(NSString *)keyPath
+                     ofObject:(id)object
+                       change:(NSDictionary *)change
+                      context:(void *)context
+{
+    if ([keyPath isEqualToString:@"readyForDisplay"]) {
+        AVPlayerLayer *layer = (AVPlayerLayer*) object;
+        if (layer.readyForDisplay) {
+            [layer removeObserver:self forKeyPath:@"readyForDisplay"];
+            
+            [self addSyncedLayerForPlayerLayer];
+            
+        }
+        
+    }
+}
+
 
 #pragma mark - Others
 - (void)dealloc {
@@ -326,38 +537,80 @@ static NSString *const kText = @"kText";
 
 - (void)setSubtitlesParts:(NSMutableDictionary *)subtitlesParts {
     
-    objc_setAssociatedObject(self, @"subtitlesParts", subtitlesParts, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, @selector(subtitlesParts), subtitlesParts, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     
 }
 
 - (NSMutableDictionary *)subtitlesParts {
     
-    return objc_getAssociatedObject(self, @"subtitlesParts");
+    return objc_getAssociatedObject(self, @selector(subtitlesParts));
     
 }
 
 - (void)setSubtitleTimer:(NSTimer *)timer {
     
-    objc_setAssociatedObject(self, @"timer", timer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, @selector(subtitleTimer), timer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     
 }
 
 - (NSTimer *)subtitleTimer {
     
-    return objc_getAssociatedObject(self, @"timer");
+    return objc_getAssociatedObject(self, @selector(subtitleTimer));
     
 }
 
 - (void)setSubtitleLabel:(UILabel *)subtitleLabel {
     
-    objc_setAssociatedObject(self, @"subtitleLabel", subtitleLabel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, @selector(subtitleLabel), subtitleLabel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     
 }
 
 - (UILabel *)subtitleLabel {
     
-    return objc_getAssociatedObject(self, @"subtitleLabel");
+    return objc_getAssociatedObject(self, @selector(subtitleLabel));
     
+}
+
+-(void)setSubtitlesView:(UIView *)subtitlesView {
+    objc_setAssociatedObject(self, @selector(subtitlesView), subtitlesView, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(UIView *)subtitlesView {
+    return objc_getAssociatedObject(self, @selector(subtitlesView));
+}
+
+-(void)setPlayerLayer:(AVPlayerLayer *)playerLayer {
+    objc_setAssociatedObject(self, @selector(playerLayer), playerLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(AVPlayerLayer *)playerLayer {
+    return objc_getAssociatedObject(self, @selector(playerLayer));
+}
+
+-(void)setSyncedLayer:(AVSynchronizedLayer *)syncedLayer {
+    objc_setAssociatedObject(self, @selector(syncedLayer), syncedLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(AVSynchronizedLayer *)syncedLayer {
+    return objc_getAssociatedObject(self, @selector(syncedLayer));
+}
+
+-(CGRect)subtitleCurrentRect {
+    
+    CGFloat boundsHeight = CGRectGetHeight(self.view.bounds);
+    
+    CGFloat originY = 31*boundsHeight / 64;
+    CGFloat visibleHeight = boundsHeight / 32;
+    
+    return CGRectMake(0, originY, CGRectGetWidth(self.view.bounds), visibleHeight);
+}
+
+-(void)setIsInitialised:(NSNumber *)isInitialised {
+    objc_setAssociatedObject(self, @selector(isInitialised), isInitialised, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(NSNumber *)isInitialised {
+    return objc_getAssociatedObject(self, @selector(isInitialised));
 }
 
 
