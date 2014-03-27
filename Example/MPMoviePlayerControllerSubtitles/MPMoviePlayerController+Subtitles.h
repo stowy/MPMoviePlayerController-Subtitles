@@ -17,10 +17,11 @@
 @property (strong, nonatomic) UILabel *subtitleLabel;
 @property (strong, nonatomic) UIView *subtitlesView;
 @property (strong, nonatomic) AVPlayerLayer *playerLayer;
-@property (strong, nonatomic) AVSynchronizedLayer *syncedLayer;
+@property (strong, nonatomic) CALayer *syncedLayer;
 
 @property (nonatomic, readonly)  CGRect subtitleCurrentRect;
 @property (nonatomic, strong) NSNumber *isInitialised;
+@property (nonatomic, strong) NSNumber *startTime;
 
 #pragma mark - Methods
 - (void)openWithSRTString:(NSString*)srtString completion:(void (^)(BOOL finished))success failure:(void (^)(NSError *error))failure;

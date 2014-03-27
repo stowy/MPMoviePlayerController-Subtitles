@@ -45,7 +45,7 @@ static NSTimeInterval const OFFSET_TIME = 8;
 @dynamic playerLayer;
 @dynamic syncedLayer;
 @dynamic isInitialised;
-
+@dynamic startTime;
 
 
 
@@ -262,14 +262,41 @@ static NSTimeInterval const OFFSET_TIME = 8;
     });
 }
 
+-(void)resizeLayer:(CATextLayer *)layer {
+    // Label position
+    CFTypeRef fontRef = layer.font;
+    CFTypeID fType = CFGetTypeID(fontRef);
+    
+    NSString *fontName = nil;
+    if (fType == CGFontGetTypeID()) {
+        fontName = CFBridgingRelease(CGFontCopyPostScriptName((CGFontRef)fontRef));
+    } else if (fType == CFStringGetTypeID()) {
+        fontName = (__bridge NSString *)(fontRef);
+    } else {
+        fontName = [[UIFont systemFontOfSize:layer.fontSize] fontName];
+    }
+    UIFont *font = [UIFont fontWithName:fontName size:layer.fontSize];
+    
+    CGSize size = [self sizeForText:layer.string
+                           withFont:font
+               constrainedWithWidth:CGRectGetWidth(layer.bounds)];
+    
+    layer.frame = ({
+        CGRect frame = layer.frame;
+        frame.size.height = size.height;
+        frame;
+    });
+}
+
+
 -(void)createAndAnimateSubtitles {
-    
-//    NSTimeInterval timeWithOffset = self.currentPlaybackTime + OFFSET_TIME;
-    
-//    NSDictionary *nextSubDict = [self subtitleForPlaybackTime:timeWithOffset];
+
+    self.syncedLayer.timeOffset = [self.syncedLayer convertTime:CACurrentMediaTime() fromLayer:nil];
+    self.syncedLayer.beginTime = CACurrentMediaTime();
+    self.startTime = @(CACurrentMediaTime());
     
     NSArray *subtitles = [self.subtitlesParts allValues];
-    // Sort
+
     
     NSSortDescriptor *sortDescriptor =
     [[NSSortDescriptor alloc] initWithKey:kStart ascending:YES];
@@ -278,24 +305,20 @@ static NSTimeInterval const OFFSET_TIME = 8;
 
     for (NSDictionary *nextSubDict in sortedSubs) {
         
-        CGFloat bottomScreenY = CGRectGetHeight(self.subtitlesView.bounds) + (SUBTITLE_INIT_HEIGHT / 2.0);
-        
-        UILabel *subtitleLabel = [self subtitleLabelAddedToSubtitlesViewAtYcenter:bottomScreenY];
-        subtitleLabel.text = [nextSubDict objectForKey:kText];
-        [self resizeLabel:subtitleLabel];
-        
-        subtitleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-        
         NSTimeInterval startTime = [[nextSubDict objectForKey:kStart] integerValue];
         NSTimeInterval endTime = [[nextSubDict objectForKey:kEnd] integerValue];
-        NSTimeInterval duration = [[nextSubDict objectForKey:kEnd] integerValue] - startTime;
+        NSTimeInterval duration = endTime - startTime;
 
         if (startTime == 0) {
             startTime += 0.001;
         }
         
-        CGFloat subtitleXPos = subtitleLabel.layer.position.x;
-        CGFloat subtitleHeight = CGRectGetHeight(subtitleLabel.frame);
+        CGFloat bottomScreenY = CGRectGetHeight(self.subtitlesView.bounds) + (SUBTITLE_INIT_HEIGHT / 2.0);
+        
+        CATextLayer *subtitleLayer = [self subtitleLayerAddedToSubtitlesViewAtYcenter:bottomScreenY withText:[nextSubDict objectForKey:kText]];
+        
+        CGFloat subtitleXPos = subtitleLayer.position.x;
+        CGFloat subtitleHeight = CGRectGetHeight(subtitleLayer.frame);
         
         CGPoint bottomScreen = CGPointMake(subtitleXPos, bottomScreenY);
         CGPoint offTopEndPoint = CGPointMake(subtitleXPos, 0 - subtitleHeight);
@@ -306,40 +329,41 @@ static NSTimeInterval const OFFSET_TIME = 8;
         
         CGPoint subStartPoint = bottomScreen;
         
+        [self.syncedLayer addSublayer:subtitleLayer];
         
-        [self.syncedLayer addSublayer:subtitleLabel.layer];
+//        CABasicAnimation *basicAnim = [CABasicAnimation animationWithKeyPath:@"position"];
+//        
+//        basicAnim.fromValue = [NSValue valueWithCGPoint:subStartPoint];
+//        basicAnim.toValue = [NSValue valueWithCGPoint:offTopEndPoint];
+//
+//        NSTimeInterval totDuration = duration + 2 * OFFSET_TIME;
+//        basicAnim.duration = totDuration;
+//        basicAnim.beginTime = CACurrentMediaTime()  + (startTime - OFFSET_TIME) - self.currentPlaybackTime;
+//        basicAnim.removedOnCompletion = NO;
+//        
+//        [subtitleLayer addAnimation:basicAnim forKey:@"anim"];
+        CAKeyframeAnimation *keyAnim = [CAKeyframeAnimation animationWithKeyPath:@"position"];
+        [keyAnim setValues:@[[NSValue valueWithCGPoint:subStartPoint],
+                             [NSValue valueWithCGPoint:startCurrentVis],
+                             [NSValue valueWithCGPoint:endCurrentVis],
+                             [NSValue valueWithCGPoint:offTopEndPoint]]];
+    
         
-        [UIView animateWithDuration:duration animations:^{
-            
-            CABasicAnimation* onAnim = [CABasicAnimation animationWithKeyPath:@"position"];
-            onAnim.fromValue = [NSValue valueWithCGPoint:subStartPoint];
-            onAnim.toValue = [NSValue valueWithCGPoint:startCurrentVis];
-            onAnim.duration = OFFSET_TIME;
-            onAnim.beginTime = startTime - OFFSET_TIME;
-            onAnim.removedOnCompletion = NO;
-            
-            CABasicAnimation* mainAnim = [CABasicAnimation animationWithKeyPath:@"position"];
-            mainAnim.fromValue = [NSValue valueWithCGPoint:startCurrentVis];
-            mainAnim.toValue = [NSValue valueWithCGPoint:endCurrentVis];
-            mainAnim.duration = duration;
-            mainAnim.beginTime = startTime;
-            mainAnim.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
-            
-            mainAnim.removedOnCompletion = NO;
-            
-            CABasicAnimation* offAnim = [CABasicAnimation animationWithKeyPath:@"position"];
-            offAnim.fromValue = [NSValue valueWithCGPoint:endCurrentVis];
-            offAnim.toValue = [NSValue valueWithCGPoint:offTopEndPoint];
-            offAnim.duration = OFFSET_TIME;
-            offAnim.beginTime = endTime;
-            offAnim.removedOnCompletion = NO;
+        NSTimeInterval totDuration = duration + 2 * OFFSET_TIME;
+        keyAnim.duration = totDuration;
+        keyAnim.beginTime = CACurrentMediaTime()  + (startTime - OFFSET_TIME) - self.currentPlaybackTime;
+        
+        float startVisTime = OFFSET_TIME / totDuration;
+        float endVisTime = (OFFSET_TIME + duration) / totDuration;
+        
+        [keyAnim setKeyTimes:@[@0, @(startVisTime), @(endVisTime), @1]];
+        keyAnim.removedOnCompletion = NO;
+        
+        [subtitleLayer addAnimation:keyAnim forKey:@"FullAnimation"];
 
-            [subtitleLabel.layer addAnimation:onAnim forKey:@"AnimateFrameBefore"];
-            [subtitleLabel.layer addAnimation:mainAnim forKey:@"AnimateFrameDuring"];
-            [subtitleLabel.layer addAnimation:offAnim forKey:@"AnimateFrameAfter"];
-        }];
     }
 
+    self.syncedLayer.hidden = NO;
     self.isInitialised = @YES;
     
 }
@@ -393,46 +417,111 @@ static NSTimeInterval const OFFSET_TIME = 8;
         [self addSyncedLayerForPlayerLayer];
     }
     
+    self.syncedLayer.hidden = NO;
+    NSTimeInterval currentTime = ([self.startTime doubleValue])  + self.currentPlaybackTime;
+    self.syncedLayer.timeOffset = currentTime;
+    self.syncedLayer.beginTime = ([self.startTime doubleValue]);
+    
     switch (self.playbackState) {
             
         case MPMoviePlaybackStateStopped: {
             
-            // Stop
-            if (self.subtitleTimer.isValid) {
-                [self.subtitleTimer invalidate];
-            }
+
+            self.syncedLayer.speed = 0;
             
+//            // Stop
+//            if (self.subtitleTimer.isValid) {
+//                [self.subtitleTimer invalidate];
+//            }
+//            
             break;
         }
             
         case MPMoviePlaybackStatePlaying: {
             
-            // Start timer
-            self.subtitleTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
-                                                                  target:self
-                                                                selector:@selector(searchAndShowSubtitle)
-                                                                userInfo:nil
-                                                                 repeats:YES];
-            [self.subtitleTimer fire];
-            
-            // Add label
-            if (!self.subtitleLabel) {
-                
-                CGFloat yCenter = CGRectGetHeight(self.subtitlesView.bounds) - (SUBTITLE_INIT_HEIGHT / 2.0) - 15.0;
-                
-                self.subtitleLabel = [self subtitleLabelAddedToSubtitlesViewAtYcenter:yCenter];
-            }
+            self.syncedLayer.timeOffset -=  CACurrentMediaTime() - [self.startTime doubleValue];
+            self.syncedLayer.speed = 1;
+//            // Start timer
+//            self.subtitleTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+//                                                                  target:self
+//                                                                selector:@selector(searchAndShowSubtitle)
+//                                                                userInfo:nil
+//                                                                 repeats:YES];
+//            [self.subtitleTimer fire];
+//            
+//            // Add label
+//            if (!self.subtitleLabel) {
+//                
+//                CGFloat yCenter = CGRectGetHeight(self.subtitlesView.bounds) / 2; //- (SUBTITLE_INIT_HEIGHT / 2.0) - 15.0;
+//                
+//                self.subtitleLabel = [self subtitleLabelAddedToSubtitlesViewAtYcenter:yCenter];
+//            }
+//            
+            break;
+        }
+        case MPMoviePlaybackStatePaused: {
+            self.syncedLayer.speed = 0;
             
             break;
         }
+        case MPMoviePlaybackStateInterrupted:  {
+            self.syncedLayer.speed = 0;
             
+            break;
+        }
+        case MPMoviePlaybackStateSeekingForward: {
+            self.syncedLayer.speed = 0;
+//            [self pause];
+            break;
+        }
+        case MPMoviePlaybackStateSeekingBackward: {
+            self.syncedLayer.speed = 0;
+//            [self pause];
+            break;
+        }
         default: {
             
             break;
         }
-            
     }
     
+}
+
+
+-(CATextLayer *)subtitleLayerAddedToSubtitlesViewAtYcenter:(CGFloat)yCenter withText:(NSString *)text {
+    CATextLayer *textLayer = [CATextLayer layer];
+    textLayer.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(self.view.bounds) - 30.0, SUBTITLE_INIT_HEIGHT);
+    
+    CGFloat xCenter = CGRectGetWidth(self.view.bounds) / 2.0;
+    
+    textLayer.position = CGPointMake(xCenter, yCenter);
+    
+    textLayer.wrapped = YES;
+    
+    CGFloat fontSize = 0.0;
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        fontSize = 40.0;
+    } else {
+        fontSize = 20.0;
+    }
+
+    textLayer.fontSize = fontSize;
+    textLayer.font = CGFontCreateWithFontName((__bridge CFStringRef)([UIFont systemFontOfSize:fontSize].fontName));
+    textLayer.foregroundColor = [[UIColor whiteColor] CGColor];
+    textLayer.string = text;
+    [self resizeLayer:textLayer];
+    
+    textLayer.backgroundColor = [[UIColor clearColor] CGColor];
+
+    textLayer.alignmentMode = kCAAlignmentCenter;
+    textLayer.shadowColor = [UIColor blackColor].CGColor;
+    textLayer.shadowOffset = CGSizeMake(6.0, 6.0);
+    textLayer.shadowOpacity = 0.9;
+    textLayer.shadowRadius = 4.0;
+    textLayer.shouldRasterize = YES;
+    textLayer.rasterizationScale = [[UIScreen mainScreen] scale];
+    
+    return textLayer;
 }
 
 -(UILabel *)subtitleLabelAddedToSubtitlesViewAtYcenter:(CGFloat)yCenter {
@@ -497,17 +586,19 @@ static NSTimeInterval const OFFSET_TIME = 8;
 
 -(void)addSyncedLayerForPlayerLayer {
     
-    AVPlayerItem *item = self.playerLayer.player.currentItem;
-    AVSynchronizedLayer *syncedLayer = [AVSynchronizedLayer synchronizedLayerWithPlayerItem:item];
-    syncedLayer.frame = self.playerLayer.frame;
+//    AVPlayerItem *item = self.playerLayer.player.currentItem;
+    CALayer *syncedLayer = [CALayer layer];
+    syncedLayer.frame = self.view.frame;
     
-    UIView *videoView = self.subtitlesView;
-    self.subtitlesView = [[UIView alloc] initWithFrame:videoView.frame];
-    [videoView addSubview:self.subtitlesView];
+//    UIView *videoView = self.subtitlesView;
+//    self.subtitlesView = [[UIView alloc] initWithFrame:videoView.frame];
+//    [videoView addSubview:self.subtitlesView];
     
-    [self.subtitlesView.layer addSublayer:syncedLayer];
+    [self.playerLayer addSublayer:syncedLayer];
     self.syncedLayer = syncedLayer;
+    self.syncedLayer.hidden = NO;
     [self createAndAnimateSubtitles];
+//    [self addAndAnimateViews];
 }
 
 -(void)observeValueForKeyPath:(NSString *)keyPath
@@ -613,5 +704,11 @@ static NSTimeInterval const OFFSET_TIME = 8;
     return objc_getAssociatedObject(self, @selector(isInitialised));
 }
 
+-(void)setStartTime:(NSNumber *)startTime {
+    objc_setAssociatedObject(self, @selector(startTime), startTime, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
+-(NSNumber *)startTime {
+    return objc_getAssociatedObject(self, @selector(startTime));
+}
 @end
