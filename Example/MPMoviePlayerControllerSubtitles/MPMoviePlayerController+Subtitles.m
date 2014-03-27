@@ -296,6 +296,13 @@ static NSTimeInterval const OFFSET_TIME = 8;
     self.syncedLayer.beginTime = CACurrentMediaTime();
     self.startTime = @(CACurrentMediaTime());
     
+    if (self.customBackgroundImage) {
+        CALayer *layer = [CALayer layer];
+        layer.frame = self.view.frame;
+        layer.contents = (__bridge_transfer id)(self.customBackgroundImage.CGImage);
+        [self.syncedLayer addSublayer:layer];
+    }
+    
     NSArray *subtitles = [self.subtitlesParts allValues];
     
     
@@ -576,4 +583,14 @@ static NSTimeInterval const OFFSET_TIME = 8;
 -(NSNumber *)startTime {
     return objc_getAssociatedObject(self, @selector(startTime));
 }
+
+-(void)setCustomBackgroundImage:(UIImage *)customBackgroundImage {
+    objc_setAssociatedObject(self, @selector(customBackgroundImage), customBackgroundImage, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(UIImage *)customBackgroundImage {
+    return  objc_getAssociatedObject(self, @selector(customBackgroundImage));
+}
+    
+
 @end

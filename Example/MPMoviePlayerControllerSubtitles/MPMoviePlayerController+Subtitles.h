@@ -20,6 +20,7 @@
 @property (nonatomic, readonly)  CGRect subtitleCurrentRect;
 @property (nonatomic, strong) NSNumber *isInitialised;
 @property (nonatomic, strong) NSNumber *startTime;
+@property (nonatomic, strong) UIImage *customBackgroundImage;
 
 #pragma mark - Methods
 - (void)openWithSRTString:(NSString*)srtString completion:(void (^)(BOOL finished))success failure:(void (^)(NSError *error))failure;
